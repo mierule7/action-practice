@@ -83,8 +83,8 @@ def api_calc():
         if op not in OPS:
             raise ValueError("Unknown operation")
         return jsonify(result=OPS[op](a, b))
-    except (KeyError, ValueError) as err:
-        return jsonify(error=str(err) or "Enter two numbers"), 400
+    except (KeyError, ValueError):
+        return jsonify(error="Invalid request. Enter two numbers and a valid operation."), 400
 
 
 @app.get("/health")
