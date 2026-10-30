@@ -38,6 +38,10 @@ jobs:
   deploy:
     name: Deploy build ${{ inputs.build_id || 'latest' }} to ${{ inputs.environment }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
     environment: ${{ inputs.environment }}
     steps:
       - name: Resolve build ID
@@ -49,8 +53,7 @@ jobs:
           if [ -n "$INPUT_ID" ]; then
             ID="$INPUT_ID"
           else
-            ID=$(gh run list --repo "${{ github.repository }}" --workflow build.yml \
-                  --status success --limit 1 --json number --jq '.[0].number')
+            ID=$(gh run list --repo "${{ github.repository }}" --workflow build.yml --status success --limit 1 --json number --jq '.[0].number')
           fi
           if [ -z "$ID" ] || [ "$ID" = "null" ]; then
             echo "No build found. Run the Build Image workflow first."
@@ -101,6 +104,7 @@ jobs:
           docker run -d --name app -e APP_ENV=$TARGET -p 8000:8000 ${{ env.IMAGE }}:$ID
           sleep 5
           curl -f http://localhost:8000/health
+          curl -f "http://localhost:8000/api/calc?a=2&b=3&op=add"
           docker rm -f app
 
       - name: Record this deployment
@@ -110,3 +114,21 @@ jobs:
         run: |
           docker tag ${{ env.IMAGE }}:$ID ${{ env.IMAGE }}:$ID-$TARGET
           docker push ${{ env.IMAGE }}:$ID-$TARGET
+
+      - name: Deployment report
+        env:
+          TARGET: ${{ inputs.environment }}
+          ID: ${{ steps.build.outputs.id }}
+        run: |
+          {
+            echo "## Deployment report"
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Environment | $TARGET |"
+            echo "| Build ID | $ID |"
+            echo "| Image | ${{ env.IMAGE }}:$ID |"
+            echo "| Marker tag | $ID-$TARGET |"
+            echo "| Deployed by | ${{ github.actor }} |"
+            echo "| Source ref | ${{ inputs.calc_commit_id || inputs.calc_branchname }} |"
+            echo "| Time (UTC) | $(date -u +'%Y-%m-%d %H:%M') |"
+          } >> "$GITHUB_STEP_SUMMARY"

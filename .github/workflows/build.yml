@@ -9,28 +9,24 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   quality:
     name: Quality gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-
+          python-version: '3.12'
+          cache: pip
       - name: Install tools
         run: pip install ruff bandit pytest pytest-cov
-
       - name: Lint (code smells, style)
         run: ruff check .
-
       - name: Security scan
         run: bandit -r . --exclude ./test_calc.py
-
       - name: Tests with coverage gate
         run: pytest -v --cov=calc --cov-report=term-missing --cov-fail-under=80
 
@@ -38,23 +34,29 @@ jobs:
     name: Build and push image
     needs: quality
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
-
+      - uses: docker/setup-buildx-action@v3
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           build-args: BUILD_ID=${{ github.run_number }}
-          tags: ghcr.io/${{ github.repository }}:${{ github.run_number }}    
-
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.run_number }}
+            ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: Show build ID
-        run: echo "Image built with BUILD ID ${{ github.run_number }}"
+        run: echo "Image built with BUILD ID ${{ github.run_number }} from commit ${{ github.sha }}"
