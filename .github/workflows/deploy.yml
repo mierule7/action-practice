@@ -92,15 +92,16 @@ jobs:
           ref: ${{ inputs.calc_commit_id != '' && inputs.calc_commit_id || inputs.calc_branchname }}
           path: calc-src
 
-      - name: Deploy
+      - name: Deploy and smoke test
         env:
           TARGET: ${{ inputs.environment }}
           ID: ${{ steps.build.outputs.id }}
         run: |
           echo "Deploying build $ID to $TARGET"
-          echo "Calc source: ${{ inputs.calc_commit_id || inputs.calc_branchname }}"
-          ls calc-src
-          docker run --rm ${{ env.IMAGE }}:$ID
+          docker run -d --name app -e APP_ENV=$TARGET -p 8000:8000 ${{ env.IMAGE }}:$ID
+          sleep 5
+          curl -f http://localhost:8000/health
+          docker rm -f app
 
       - name: Record this deployment
         env:

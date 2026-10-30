@@ -53,7 +53,8 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.run_number }}
+          build-args: BUILD_ID=${{ github.run_number }}
+          tags: ghcr.io/${{ github.repository }}:${{ github.run_number }}    
 
       - name: Show build ID
         run: echo "Image built with BUILD ID ${{ github.run_number }}"
