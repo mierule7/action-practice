@@ -1,0 +1,28 @@
+name: Code Quality
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools
+        run: pip install ruff bandit pytest pytest-cov
+
+      - name: Lint (code smells, style)
+        run: ruff check .
+
+      - name: Security scan
+        run: bandit -r . --exclude ./test_calc.py
+
+      - name: Tests with coverage gate
+        run: pytest --cov=calc --cov-report=term-missing --cov-fail-under=80
