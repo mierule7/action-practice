@@ -1,6 +1,6 @@
 name: Manual Deploy
 
-run-name: ${{ inputs.environment == 'dev' && 'Dev Environment' || inputs.environment == 'uat' && 'UAT Environment' || 'Prod Environment' }} - ${{ inputs.version }}
+run-name: ${{ inputs.environment == 'dev' && 'Dev Environment' || inputs.environment == 'uat' && 'UAT Environment' || 'Prod Environment' }} - Build ${{ inputs.build_id }}
 
 on:
   workflow_dispatch:
@@ -13,41 +13,55 @@ on:
           - dev
           - uat
           - prod
-      version:
-        description: "Branch, tag or commit SHA to deploy"
+      build_id:
+        description: "Build ID to deploy (e.g. 12)"
+        type: string
         required: true
-        default: main
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  test:
-    name: Run tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.version }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install pytest
-        run: pip install pytest
-
-      - name: Run tests
-        run: pytest -v
-
   deploy:
-    name: Deploy to ${{ inputs.environment }}
-    needs: test
+    name: Deploy build ${{ inputs.build_id }} to ${{ inputs.environment }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          ref: ${{ inputs.version }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check the build exists
+        run: docker pull ${{ env.IMAGE }}:${{ inputs.build_id }}
+
+      - name: Check promotion order
+        run: |
+          ENV="${{ inputs.environment }}"
+          ID="${{ inputs.build_id }}"
+          if [ "$ENV" = "uat" ]; then REQUIRED="dev"; fi
+          if [ "$ENV" = "prod" ]; then REQUIRED="uat"; fi
+          if [ -n "$REQUIRED" ]; then
+            if docker manifest inspect ${{ env.IMAGE }}:$ID-$REQUIRED > /dev/null 2>&1; then
+              echo "OK: build $ID was already deployed to $REQUIRED"
+            else
+              echo "BLOCKED: build $ID has not been deployed to $REQUIRED yet"
+              exit 1
+            fi
+          fi
 
       - name: Deploy
         run: |
-          echo "Deploying ${{ inputs.version }} to ${{ inputs.environment }}"
-          echo "Commit: ${{ github.sha }}"
+          echo "Deploying build ${{ inputs.build_id }} to ${{ inputs.environment }}"
+          docker run --rm ${{ env.IMAGE }}:${{ inputs.build_id }}
+
+      - name: Record this deployment
+        run: |
+          docker tag ${{ env.IMAGE }}:${{ inputs.build_id }} ${{ env.IMAGE }}:${{ inputs.build_id }}-${{ inputs.environment }}
+          docker push ${{ env.IMAGE }}:${{ inputs.build_id }}-${{ inputs.environment }}
