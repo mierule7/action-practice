@@ -1,12 +1,12 @@
 name: Manual Deploy
 
-run-name: ${{ inputs.environment == 'dev' && 'Dev Environment' || inputs.environment == 'uat' && 'UAT Environment' || 'Prod Environment' }} - Build ${{ inputs.build_id }}
+run-name: ${{ inputs.environment }} - Build ${{ inputs.build_id || 'latest' }}
 
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: "Where to deploy"
+        description: "Target environment"
         type: choice
         required: true
         options:
@@ -14,23 +14,59 @@ on:
           - uat
           - prod
       build_id:
-        description: "Build ID to deploy (e.g. 12)"
+        description: "Build image ID (leave blank for the latest build)"
         type: string
-        required: true
+        required: false
+      data_branchname:
+        description: "Enter data branch name"
+        type: string
+        default: main
+      common_branchname:
+        description: "Enter common branch name"
+        type: string
+        default: main
+      cond_branchname:
+        description: "Enter branch name of KKM-hub"
+        type: string
+        default: main
+      cond_commit_id:
+        description: "Commit id for the KKM-hub branch (leave blank for latest)"
+        type: string
+        required: false
 
 permissions:
   contents: read
   packages: write
+  actions: read
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
   deploy:
-    name: Deploy build ${{ inputs.build_id }} to ${{ inputs.environment }}
+    name: Deploy build ${{ inputs.build_id || 'latest' }} to ${{ inputs.environment }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
+      - name: Resolve build ID
+        id: build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_ID: ${{ inputs.build_id }}
+        run: |
+          if [ -n "$INPUT_ID" ]; then
+            ID="$INPUT_ID"
+          else
+            ID=$(gh run list --repo "${{ github.repository }}" --workflow build.yml \
+                  --status success --limit 1 --json number --jq '.[0].number')
+          fi
+          if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+            echo "No build found. Run the Build Image workflow first."
+            exit 1
+          fi
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+          echo "Using build ID: $ID"
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -39,14 +75,16 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check the build exists
-        run: docker pull ${{ env.IMAGE }}:${{ inputs.build_id }}
+        run: docker pull ${{ env.IMAGE }}:${{ steps.build.outputs.id }}
 
       - name: Check promotion order
+        env:
+          TARGET: ${{ inputs.environment }}
+          ID: ${{ steps.build.outputs.id }}
         run: |
-          ENV="${{ inputs.environment }}"
-          ID="${{ inputs.build_id }}"
-          if [ "$ENV" = "uat" ]; then REQUIRED="dev"; fi
-          if [ "$ENV" = "prod" ]; then REQUIRED="uat"; fi
+          REQUIRED=""
+          if [ "$TARGET" = "uat" ]; then REQUIRED="dev"; fi
+          if [ "$TARGET" = "prod" ]; then REQUIRED="uat"; fi
           if [ -n "$REQUIRED" ]; then
             if docker manifest inspect ${{ env.IMAGE }}:$ID-$REQUIRED > /dev/null 2>&1; then
               echo "OK: build $ID was already deployed to $REQUIRED"
@@ -56,12 +94,45 @@ jobs:
             fi
           fi
 
+      # ---- Other repositories (edit names, or delete blocks you don't need) ----
+      - name: Checkout data repo
+        uses: actions/checkout@v4
+        with:
+          repository: mierule7/data
+          ref: ${{ inputs.data_branchname }}
+          path: data
+          token: ${{ secrets.REPO_PAT }}
+
+      - name: Checkout common repo
+        uses: actions/checkout@v4
+        with:
+          repository: mierule7/common
+          ref: ${{ inputs.common_branchname }}
+          path: common
+          token: ${{ secrets.REPO_PAT }}
+
+      - name: Checkout KKM-hub repo
+        uses: actions/checkout@v4
+        with:
+          repository: mierule7/kkm-hub
+          ref: ${{ inputs.cond_commit_id != '' && inputs.cond_commit_id || inputs.cond_branchname }}
+          path: kkm-hub
+          token: ${{ secrets.REPO_PAT }}
+      # -------------------------------------------------------------------------
+
       - name: Deploy
+        env:
+          TARGET: ${{ inputs.environment }}
+          ID: ${{ steps.build.outputs.id }}
         run: |
-          echo "Deploying build ${{ inputs.build_id }} to ${{ inputs.environment }}"
-          docker run --rm ${{ env.IMAGE }}:${{ inputs.build_id }}
+          echo "Deploying build $ID to $TARGET"
+          ls
+          docker run --rm ${{ env.IMAGE }}:$ID
 
       - name: Record this deployment
+        env:
+          TARGET: ${{ inputs.environment }}
+          ID: ${{ steps.build.outputs.id }}
         run: |
-          docker tag ${{ env.IMAGE }}:${{ inputs.build_id }} ${{ env.IMAGE }}:${{ inputs.build_id }}-${{ inputs.environment }}
-          docker push ${{ env.IMAGE }}:${{ inputs.build_id }}-${{ inputs.environment }}
+          docker tag ${{ env.IMAGE }}:$ID ${{ env.IMAGE }}:$ID-$TARGET
+          docker push ${{ env.IMAGE }}:$ID-$TARGET
