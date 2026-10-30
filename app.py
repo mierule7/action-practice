@@ -33,7 +33,7 @@ PAGE = """
 <body>
   <div class="banner">{{ env|upper }} &middot; Build {{ build }}</div>
   <div class="box">
-    <h2>Calculator</h2>
+    <h2>Calculatorv2</h2>
     <input id="a" type="number" step="any" placeholder="First number">
     <select id="op">
       <option value="add">+ Add</option>
