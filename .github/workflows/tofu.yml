@@ -1,0 +1,30 @@
+name: OpenTofu Checks
+
+on:
+  pull_request:
+    paths:
+      - 'tofu/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tofu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+      - name: Format check
+        run: tofu fmt -check -recursive
+      - name: Init (no backend)
+        run: tofu init -backend=false -input=false
+      - name: Validate
+        run: tofu validate
+      - name: Scan OpenTofu code with Trivy
+        working-directory: .
+        run: docker run --rm -v "${{ github.workspace }}/tofu:/work" aquasec/trivy:latest config --severity HIGH,CRITICAL --exit-code 0 /work
