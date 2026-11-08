@@ -56,6 +56,8 @@ jobs:
         env:
           TARGET: ${{ inputs.environment }}
           ID: ${{ inputs.build_id }}
+          LOGTIDE_API_KEY: ${{ secrets.LOGTIDE_API_KEY }}
+          LOGTIDE_API_URL: ${{ vars.LOGTIDE_API_URL }}
         run: |
           $ErrorActionPreference = 'Continue'
           $ports = @{ dev = 8081; uat = 8082; prod = 8083 }
@@ -65,7 +67,7 @@ jobs:
           docker pull $img
           if ($LASTEXITCODE -ne 0) { exit 1 }
           docker rm -f $name *> $null
-          docker run -d --name $name --restart unless-stopped -p "${port}:8000" -e "APP_ENV=$($env:TARGET)" $img
+          docker run -d --name $name --restart unless-stopped -p "${port}:8000" -e "APP_ENV=$($env:TARGET)" -e LOGTIDE_API_KEY -e LOGTIDE_API_URL $img
           if ($LASTEXITCODE -ne 0) { exit 1 }
           $ok = $false
           for ($i = 0; $i -lt 10; $i++) {

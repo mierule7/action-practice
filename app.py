@@ -1,10 +1,32 @@
 import os
 
 from flask import Flask, jsonify, render_template_string, request
+from logtide_sdk import ClientOptions, LogTideClient
+from logtide_sdk.middleware import LogTideFlaskMiddleware
 
 import calc
 
 app = Flask(__name__)
+
+if os.environ.get("LOGTIDE_API_KEY"):
+    client = LogTideClient(
+        ClientOptions(
+            api_url=os.environ["LOGTIDE_API_URL"],
+            api_key=os.environ["LOGTIDE_API_KEY"],
+            global_metadata={
+                "env": os.environ.get("APP_ENV", "local"),
+                "build": os.environ.get("BUILD_ID", "local"),
+            },
+        )
+    )
+    LogTideFlaskMiddleware(
+        app,
+        client=client,
+        service_name="calc-app",
+        log_requests=True,
+        log_responses=True,
+        skip_paths=["/health"],
+    )
 
 OPS = {
     "add": calc.add,
@@ -33,7 +55,7 @@ PAGE = """
 <body>
   <div class="banner">{{ env|upper }} &middot; Build {{ build }}</div>
   <div class="box">
-    <h2>Calculatorv2</h2>
+    <h2>Calculator v2</h2>
     <input id="a" type="number" step="any" placeholder="First number">
     <select id="op">
       <option value="add">+ Add</option>
@@ -83,8 +105,8 @@ def api_calc():
         if op not in OPS:
             raise ValueError("Unknown operation")
         return jsonify(result=OPS[op](a, b))
-    except (KeyError, ValueError):
-        return jsonify(error="Invalid request. Enter two numbers and a valid operation."), 400
+    except (KeyError, ValueError) as err:
+        return jsonify(error=str(err) or "Enter two numbers"), 400
 
 
 @app.get("/health")
