@@ -8,6 +8,7 @@ import calc
 
 app = Flask(__name__)
 
+client = None
 if os.environ.get("LOGTIDE_API_KEY"):
     client = LogTideClient(
         ClientOptions(
@@ -106,6 +107,12 @@ def api_calc():
             raise ValueError("Unknown operation")
         return jsonify(result=OPS[op](a, b))
     except (KeyError, ValueError) as err:
+        if client:
+            client.warn(
+                "calc-app",
+                "Bad calculation request",
+                {"op": op, "error": str(err) or "Enter two numbers"},
+            )
         return jsonify(error=str(err) or "Enter two numbers"), 400
 
 
