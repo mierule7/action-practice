@@ -35,32 +35,51 @@ jobs:
     environment: ${{ inputs.environment }}
     defaults:
       run:
-        shell: bash
+        shell: powershell
     steps:
       - name: Check Manual Deploy already passed for this build
         env:
           TARGET: ${{ inputs.environment }}
           ID: ${{ inputs.build_id }}
         run: |
-          if docker manifest inspect ${{ env.IMAGE }}:$ID-$TARGET > /dev/null 2>&1; then
-            echo "OK: build $ID was already deployed to $TARGET by Manual Deploy"
-          else
-            echo "BLOCKED: run Manual Deploy for $TARGET with build $ID first"
+          $ErrorActionPreference = 'Continue'
+          $marker = "${{ env.IMAGE }}:$($env:ID)-$($env:TARGET)"
+          docker manifest inspect $marker *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "OK: build $($env:ID) was already deployed to $($env:TARGET) by Manual Deploy"
+          } else {
+            Write-Host "BLOCKED: run Manual Deploy for $($env:TARGET) with build $($env:ID) first"
             exit 1
-          fi
+          }
 
       - name: Start the container
         env:
           TARGET: ${{ inputs.environment }}
           ID: ${{ inputs.build_id }}
         run: |
-          case "$TARGET" in
-            dev) PORT=8081 ;;
-            uat) PORT=8082 ;;
-            prod) PORT=8083 ;;
-          esac
-          docker pull ${{ env.IMAGE }}:$ID
-          docker rm -f calc-$TARGET 2>/dev/null || true
-          docker run -d --name calc-$TARGET --restart unless-stopped -p $PORT:8000 -e APP_ENV=$TARGET ${{ env.IMAGE }}:$ID
-          curl -f --retry 5 --retry-delay 2 --retry-all-errors http://localhost:$PORT/health
-          echo "Open http://localhost:$PORT"
+          $ErrorActionPreference = 'Continue'
+          $ports = @{ dev = 8081; uat = 8082; prod = 8083 }
+          $port = $ports[$env:TARGET]
+          $img = "${{ env.IMAGE }}:$($env:ID)"
+          $name = "calc-$($env:TARGET)"
+          docker pull $img
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          docker rm -f $name *> $null
+          docker run -d --name $name --restart unless-stopped -p "${port}:8000" -e "APP_ENV=$($env:TARGET)" $img
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $ok = $false
+          for ($i = 0; $i -lt 10; $i++) {
+            try {
+              Invoke-RestMethod -Uri "http://localhost:$port/health" -TimeoutSec 3 | Out-Null
+              $ok = $true
+              break
+            } catch {
+              Start-Sleep -Seconds 2
+            }
+          }
+          if (-not $ok) {
+            Write-Host "Health check failed. Container logs:"
+            docker logs $name
+            exit 1
+          }
+          Write-Host "Open http://localhost:$port"
