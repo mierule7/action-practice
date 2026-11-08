@@ -45,7 +45,7 @@ jobs:
       run:
         shell: powershell
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check Manual Deploy already passed for this build
         if: inputs.action == 'apply'

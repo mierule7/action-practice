@@ -90,7 +90,7 @@ jobs:
           fi
 
       - name: Checkout calc code (branch or commit)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.calc_commit_id != '' && inputs.calc_commit_id || inputs.calc_branchname }}
           path: calc-src

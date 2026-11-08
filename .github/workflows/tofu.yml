@@ -17,7 +17,7 @@ jobs:
       run:
         working-directory: tofu
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: opentofu/setup-opentofu@v1
       - name: Format check
         run: tofu fmt -check -recursive
