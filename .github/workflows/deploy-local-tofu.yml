@@ -1,0 +1,88 @@
+name: Deploy Local (OpenTofu)
+
+run-name: Tofu ${{ inputs.action }} ${{ inputs.environment }} - Build ${{ inputs.build_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'apply starts or updates, destroy removes'
+        type: choice
+        required: true
+        options:
+          - apply
+          - destroy
+      environment:
+        description: 'Target environment'
+        type: choice
+        required: true
+        options:
+          - dev
+          - uat
+          - prod
+      build_id:
+        description: 'Build ID (already deployed by Manual Deploy)'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  TF_VAR_docker_host: npipe:////.//pipe//docker_engine
+
+jobs:
+  tofu-local:
+    name: Tofu ${{ inputs.action }} ${{ inputs.environment }} build ${{ inputs.build_id }}
+    runs-on: self-hosted
+    timeout-minutes: 15
+    concurrency:
+      group: local-${{ inputs.environment }}
+      cancel-in-progress: false
+    environment: ${{ inputs.environment }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Manual Deploy already passed for this build
+        if: inputs.action == 'apply'
+        env:
+          TARGET: ${{ inputs.environment }}
+          ID: ${{ inputs.build_id }}
+        run: |
+          if docker manifest inspect ${{ env.IMAGE }}:$ID-$TARGET > /dev/null 2>&1; then
+            echo "OK: build $ID was already deployed to $TARGET by Manual Deploy"
+          else
+            echo "BLOCKED: run Manual Deploy for $TARGET with build $ID first"
+            exit 1
+          fi
+
+      - name: OpenTofu init, plan and apply
+        if: inputs.action == 'apply'
+        working-directory: tofu
+        env:
+          TARGET: ${{ inputs.environment }}
+          ID: ${{ inputs.build_id }}
+        run: |
+          mkdir -p C:/tofu-state
+          STATE=C:/tofu-state/$TARGET.tfstate
+          tofu init -input=false
+          tofu plan -input=false -state=$STATE -var="environment=$TARGET" -var="build_id=$ID" -var="image_repo=${{ env.IMAGE }}"
+          tofu apply -auto-approve -input=false -state=$STATE -var="environment=$TARGET" -var="build_id=$ID" -var="image_repo=${{ env.IMAGE }}"
+          PORT=$(tofu output -raw -state=$STATE host_port)
+          curl -f --retry 5 --retry-delay 2 --retry-all-errors http://localhost:$PORT/health
+          echo "Open http://localhost:$PORT"
+
+      - name: OpenTofu destroy
+        if: inputs.action == 'destroy'
+        working-directory: tofu
+        env:
+          TARGET: ${{ inputs.environment }}
+          ID: ${{ inputs.build_id }}
+        run: |
+          STATE=C:/tofu-state/$TARGET.tfstate
+          tofu init -input=false
+          tofu destroy -auto-approve -input=false -state=$STATE -var="environment=$TARGET" -var="build_id=$ID" -var="image_repo=${{ env.IMAGE }}"

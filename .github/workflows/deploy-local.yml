@@ -1,0 +1,66 @@
+name: Deploy Local
+
+run-name: Local ${{ inputs.environment }} - Build ${{ inputs.build_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        type: choice
+        required: true
+        options:
+          - dev
+          - uat
+          - prod
+      build_id:
+        description: 'Build ID to start on my PC (already deployed by Manual Deploy)'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  deploy-local:
+    name: Start build ${{ inputs.build_id }} as ${{ inputs.environment }} on my PC
+    runs-on: self-hosted
+    timeout-minutes: 10
+    concurrency:
+      group: local-${{ inputs.environment }}
+      cancel-in-progress: false
+    environment: ${{ inputs.environment }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check Manual Deploy already passed for this build
+        env:
+          TARGET: ${{ inputs.environment }}
+          ID: ${{ inputs.build_id }}
+        run: |
+          if docker manifest inspect ${{ env.IMAGE }}:$ID-$TARGET > /dev/null 2>&1; then
+            echo "OK: build $ID was already deployed to $TARGET by Manual Deploy"
+          else
+            echo "BLOCKED: run Manual Deploy for $TARGET with build $ID first"
+            exit 1
+          fi
+
+      - name: Start the container
+        env:
+          TARGET: ${{ inputs.environment }}
+          ID: ${{ inputs.build_id }}
+        run: |
+          case "$TARGET" in
+            dev) PORT=8081 ;;
+            uat) PORT=8082 ;;
+            prod) PORT=8083 ;;
+          esac
+          docker pull ${{ env.IMAGE }}:$ID
+          docker rm -f calc-$TARGET 2>/dev/null || true
+          docker run -d --name calc-$TARGET --restart unless-stopped -p $PORT:8000 -e APP_ENV=$TARGET ${{ env.IMAGE }}:$ID
+          curl -f --retry 5 --retry-delay 2 --retry-all-errors http://localhost:$PORT/health
+          echo "Open http://localhost:$PORT"
