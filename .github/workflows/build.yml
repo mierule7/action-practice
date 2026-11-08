@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+env:
+  TRIVY_IMAGE: aquasec/trivy:latest
+  TRIVY_EXIT_CODE: '0'
+
 jobs:
   quality:
     name: Quality gate
@@ -31,10 +35,10 @@ jobs:
         run: pytest -v --cov=calc --cov-report=term-missing --cov-fail-under=80
 
   build:
-    name: Build and push image
+    name: Build, scan and push image
     needs: quality
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -47,16 +51,28 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push image
+
+      - name: Build image (not pushed yet)
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          load: true
+          pull: true
           build-args: BUILD_ID=${{ github.run_number }}
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ github.run_number }}
-            ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+          tags: scan-target:${{ github.run_number }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Scan image with Trivy
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/work" -w /work ${{ env.TRIVY_IMAGE }} image --severity CRITICAL,HIGH --ignore-unfixed --exit-code ${{ env.TRIVY_EXIT_CODE }} scan-target:${{ github.run_number }}
+
+      - name: Push the scanned image
+        run: |
+          docker tag scan-target:${{ github.run_number }} ghcr.io/${{ github.repository }}:${{ github.run_number }}
+          docker tag scan-target:${{ github.run_number }} ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+          docker push ghcr.io/${{ github.repository }}:${{ github.run_number }}
+          docker push ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+
       - name: Show build ID
         run: echo "Image built with BUILD ID ${{ github.run_number }} from commit ${{ github.sha }}"
