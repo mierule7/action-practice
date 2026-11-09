@@ -1,5 +1,8 @@
+import json
 import os
+import time
 
+from confluent_kafka import KafkaException, Producer
 from flask import Flask, jsonify, render_template_string, request
 from logtide_sdk import ClientOptions, LogTideClient
 from logtide_sdk.middleware import LogTideFlaskMiddleware
@@ -8,16 +11,19 @@ import calc
 
 app = Flask(__name__)
 
+APP_ENV = os.environ.get("APP_ENV", "local")
+BUILD_ID = os.environ.get("BUILD_ID", "local")
+TOPIC = f"calc.events.{APP_ENV}"
+
 client = None
+producer = None
+
 if os.environ.get("LOGTIDE_API_KEY"):
     client = LogTideClient(
         ClientOptions(
             api_url=os.environ["LOGTIDE_API_URL"],
             api_key=os.environ["LOGTIDE_API_KEY"],
-            global_metadata={
-                "env": os.environ.get("APP_ENV", "local"),
-                "build": os.environ.get("BUILD_ID", "local"),
-            },
+            global_metadata={"env": APP_ENV, "build": BUILD_ID},
         )
     )
     LogTideFlaskMiddleware(
@@ -28,6 +34,42 @@ if os.environ.get("LOGTIDE_API_KEY"):
         log_responses=True,
         skip_paths=["/health"],
     )
+
+if os.environ.get("KAFKA_BOOTSTRAP"):
+    producer = Producer(
+        {
+            "bootstrap.servers": os.environ["KAFKA_BOOTSTRAP"],
+            "message.timeout.ms": 5000,
+        }
+    )
+
+
+def on_delivery(err, msg):
+    if err is not None:
+        app.logger.warning("Kafka delivery failed: %s", err)
+
+
+def publish_event(op, a, b, result):
+    """Send one event to Kafka. A broker problem must never break a calculation."""
+    if producer is None:
+        return
+    event = {
+        "env": APP_ENV,
+        "build": BUILD_ID,
+        "op": op,
+        "a": a,
+        "b": b,
+        "result": result,
+        "ts": time.time(),
+    }
+    try:
+        producer.produce(
+            TOPIC, json.dumps(event).encode("utf-8"), callback=on_delivery
+        )
+        producer.poll(0)
+    except (BufferError, KafkaException) as err:
+        app.logger.warning("Kafka publish failed: %s", err)
+
 
 OPS = {
     "add": calc.add,
@@ -88,12 +130,11 @@ COLORS = {"dev": "#1976d2", "uat": "#f57c00", "prod": "#c62828"}
 
 @app.get("/")
 def index():
-    env = os.environ.get("APP_ENV", "local")
     return render_template_string(
         PAGE,
-        env=env,
-        color=COLORS.get(env, "#555"),
-        build=os.environ.get("BUILD_ID", "local"),
+        env=APP_ENV,
+        color=COLORS.get(APP_ENV, "#555"),
+        build=BUILD_ID,
     )
 
 
@@ -105,7 +146,7 @@ def api_calc():
         b = float(request.args["b"])
         if op not in OPS:
             raise ValueError("Unknown operation")
-        return jsonify(result=OPS[op](a, b))
+        result = OPS[op](a, b)
     except (KeyError, ValueError) as err:
         if client:
             client.warn(
@@ -114,12 +155,13 @@ def api_calc():
                 {"op": op, "error": str(err) or "Enter two numbers"},
             )
         return jsonify(error=str(err) or "Enter two numbers"), 400
+    publish_event(op, a, b, result)
+    return jsonify(result=result)
 
 
 @app.get("/health")
 def health():
-    return jsonify(status="ok", env=os.environ.get("APP_ENV", "local"),
-                   build=os.environ.get("BUILD_ID", "local"))
+    return jsonify(status="ok", env=APP_ENV, build=BUILD_ID)
 
 
 if __name__ == "__main__":
