@@ -12,4 +12,4 @@ ARG BUILD_ID=local
 ENV BUILD_ID=$BUILD_ID
 LABEL org.opencontainers.image.source="https://github.com/mierule7/action-practice"
 EXPOSE 8000
-CMD ["gunicorn", "-b", "0.0.0.0:8000", "app:app"]
+CMD ["gunicorn", "-b", "0.0.0.0:8000", "--worker-class", "gthread", "--workers", "1", "--threads", "4", "--timeout", "60", "--access-logfile", "-", "app:app"]
