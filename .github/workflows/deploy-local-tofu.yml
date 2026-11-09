@@ -54,7 +54,6 @@ jobs:
           ID: ${{ inputs.build_id }}
         run: |
           $ErrorActionPreference = 'Continue'
-          Remove-Item -Recurse -Force .terraform -ErrorAction SilentlyContinue
           $marker = "${{ env.IMAGE }}:$($env:ID)-$($env:TARGET)"
           docker manifest inspect $marker *> $null
           if ($LASTEXITCODE -eq 0) {
@@ -70,30 +69,38 @@ jobs:
         env:
           TARGET: ${{ inputs.environment }}
           ID: ${{ inputs.build_id }}
+          TF_VAR_logtide_api_key: ${{ secrets.LOGTIDE_API_KEY }}
+          TF_VAR_logtide_api_url: ${{ vars.LOGTIDE_API_URL }}
         run: |
           $ErrorActionPreference = 'Continue'
           Remove-Item -Recurse -Force .terraform -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path C:/tofu-state | Out-Null
           $state = "C:/tofu-state/$($env:TARGET).tfstate"
           $repo = "${{ env.IMAGE }}"
-          tofu init -input=false
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $ok = $false
+          for ($i = 1; $i -le 3; $i++) {
+            tofu init -input=false
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "tofu init failed (attempt $i of 3). Waiting 15 seconds."
+            Start-Sleep -Seconds 15
+          }
+          if (-not $ok) { exit 1 }
           tofu plan -input=false "-state=$state" "-var=environment=$($env:TARGET)" "-var=build_id=$($env:ID)" "-var=image_repo=$repo"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           tofu apply -auto-approve -input=false "-state=$state" "-var=environment=$($env:TARGET)" "-var=build_id=$($env:ID)" "-var=image_repo=$repo"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           $port = tofu output -raw "-state=$state" host_port
-          $ok = $false
+          $healthy = $false
           for ($i = 0; $i -lt 10; $i++) {
             try {
               Invoke-RestMethod -Uri "http://localhost:$port/health" -TimeoutSec 3 | Out-Null
-              $ok = $true
+              $healthy = $true
               break
             } catch {
               Start-Sleep -Seconds 2
             }
           }
-          if (-not $ok) {
+          if (-not $healthy) {
             Write-Host "Health check failed"
             exit 1
           }
@@ -107,10 +114,16 @@ jobs:
           ID: ${{ inputs.build_id }}
         run: |
           $ErrorActionPreference = 'Continue'
+          Remove-Item -Recurse -Force .terraform -ErrorAction SilentlyContinue
           $state = "C:/tofu-state/$($env:TARGET).tfstate"
           $repo = "${{ env.IMAGE }}"
-          Remove-Item -Recurse -Force .terraform -ErrorAction SilentlyContinue
-          tofu init -input=false
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $ok = $false
+          for ($i = 1; $i -le 3; $i++) {
+            tofu init -input=false
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "tofu init failed (attempt $i of 3). Waiting 15 seconds."
+            Start-Sleep -Seconds 15
+          }
+          if (-not $ok) { exit 1 }
           tofu destroy -auto-approve -input=false "-state=$state" "-var=environment=$($env:TARGET)" "-var=build_id=$($env:ID)" "-var=image_repo=$repo"
           if ($LASTEXITCODE -ne 0) { exit 1 }
