@@ -1,8 +1,9 @@
-   .venv/
-   __pycache__/
-   .pytest_cache/
-   .ruff_cache/
-   .coverage
-   .terraform/
-   *.tfstate
-   *.tfstate.*
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+.terraform/
+*.tfstate
+*.tfstate.*
