@@ -71,6 +71,7 @@ jobs:
           ID: ${{ inputs.build_id }}
           TF_VAR_logtide_api_key: ${{ secrets.LOGTIDE_API_KEY }}
           TF_VAR_logtide_api_url: ${{ vars.LOGTIDE_API_URL }}
+          OPENTOFU_ENFORCE_GPG_VALIDATION: "false"
         run: |
           $ErrorActionPreference = 'Continue'
           Remove-Item -Recurse -Force .terraform -ErrorAction SilentlyContinue
@@ -112,6 +113,7 @@ jobs:
         env:
           TARGET: ${{ inputs.environment }}
           ID: ${{ inputs.build_id }}
+          OPENTOFU_ENFORCE_GPG_VALIDATION: "false"
         run: |
           $ErrorActionPreference = 'Continue'
           Remove-Item -Recurse -Force .terraform -ErrorAction SilentlyContinue
