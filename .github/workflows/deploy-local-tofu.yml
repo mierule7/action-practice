@@ -54,6 +54,7 @@ jobs:
           ID: ${{ inputs.build_id }}
         run: |
           $ErrorActionPreference = 'Continue'
+          Remove-Item -Recurse -Force .terraform -ErrorAction SilentlyContinue
           $marker = "${{ env.IMAGE }}:$($env:ID)-$($env:TARGET)"
           docker manifest inspect $marker *> $null
           if ($LASTEXITCODE -eq 0) {
@@ -71,6 +72,7 @@ jobs:
           ID: ${{ inputs.build_id }}
         run: |
           $ErrorActionPreference = 'Continue'
+          Remove-Item -Recurse -Force .terraform -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path C:/tofu-state | Out-Null
           $state = "C:/tofu-state/$($env:TARGET).tfstate"
           $repo = "${{ env.IMAGE }}"
@@ -107,6 +109,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
           $state = "C:/tofu-state/$($env:TARGET).tfstate"
           $repo = "${{ env.IMAGE }}"
+          Remove-Item -Recurse -Force .terraform -ErrorAction SilentlyContinue
           tofu init -input=false
           if ($LASTEXITCODE -ne 0) { exit 1 }
           tofu destroy -auto-approve -input=false "-state=$state" "-var=environment=$($env:TARGET)" "-var=build_id=$($env:ID)" "-var=image_repo=$repo"
