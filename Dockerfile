@@ -4,7 +4,8 @@ RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN gunicorn --version
-COPY calc.py app.py ./
+RUN python -c "import confluent_kafka"
+COPY calc.py app.py worker.py ./
 RUN useradd --create-home appuser
 USER appuser
 ARG BUILD_ID=local
