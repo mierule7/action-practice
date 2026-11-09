@@ -52,7 +52,7 @@ jobs:
             exit 1
           }
 
-      - name: Start the container
+      - name: Start the app and the worker
         env:
           TARGET: ${{ inputs.environment }}
           ID: ${{ inputs.build_id }}
@@ -63,11 +63,15 @@ jobs:
           $ports = @{ dev = 8081; uat = 8082; prod = 8083 }
           $port = $ports[$env:TARGET]
           $img = "${{ env.IMAGE }}:$($env:ID)"
-          $name = "calc-$($env:TARGET)"
+          $app = "calc-$($env:TARGET)"
+          $worker = "calc-worker-$($env:TARGET)"
           docker pull $img
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          docker rm -f $name *> $null
-          docker run -d --name $name --restart unless-stopped -p "${port}:8000" -e "APP_ENV=$($env:TARGET)" -e LOGTIDE_API_KEY -e LOGTIDE_API_URL $img
+          docker network create calc-net *> $null
+          docker rm -f $app $worker *> $null
+          docker run -d --name $app --network calc-net --restart unless-stopped -p "${port}:8000" -e "APP_ENV=$($env:TARGET)" -e "KAFKA_BOOTSTRAP=kafka:9093" -e LOGTIDE_API_KEY -e LOGTIDE_API_URL $img
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          docker run -d --name $worker --network calc-net --restart unless-stopped -e "APP_ENV=$($env:TARGET)" -e "KAFKA_BOOTSTRAP=kafka:9093" $img python worker.py
           if ($LASTEXITCODE -ne 0) { exit 1 }
           $ok = $false
           for ($i = 0; $i -lt 10; $i++) {
@@ -81,7 +85,7 @@ jobs:
           }
           if (-not $ok) {
             Write-Host "Health check failed. Container logs:"
-            docker logs $name
+            docker logs $app
             exit 1
           }
           Write-Host "Open http://localhost:$port"
