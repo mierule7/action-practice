@@ -4,8 +4,8 @@ RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN gunicorn --version
-RUN python -c "import confluent_kafka"
-COPY calc.py app.py worker.py ./
+RUN python -c "import confluent_kafka, opentelemetry.instrumentation.flask, opentelemetry.instrumentation.confluent_kafka"
+COPY calc.py app.py worker.py telemetry.py ./
 RUN useradd --create-home appuser
 USER appuser
 ARG BUILD_ID=local

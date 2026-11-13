@@ -3,9 +3,19 @@ import os
 import signal
 
 from confluent_kafka import Consumer
+from opentelemetry import metrics
+from opentelemetry.instrumentation.confluent_kafka import ConfluentKafkaInstrumentor
+
+import telemetry
 
 env = os.environ.get("APP_ENV", "local")
 topic = f"calc.events.{env}"
+
+tracer_provider = telemetry.setup("calc-worker")
+meter = metrics.get_meter("calc-worker")
+processed = meter.create_counter(
+    "calc.events.processed", description="Events handled by the worker"
+)
 
 consumer = Consumer(
     {
@@ -14,6 +24,10 @@ consumer = Consumer(
         "auto.offset.reset": "earliest",
     }
 )
+if tracer_provider is not None:
+    consumer = ConfluentKafkaInstrumentor().instrument_consumer(
+        consumer, tracer_provider=tracer_provider
+    )
 consumer.subscribe([topic])
 
 running = True
@@ -39,6 +53,7 @@ try:
             continue
         event = json.loads(msg.value().decode("utf-8"))
         count += 1
+        processed.add(1, {"op": event["op"]})
         print(
             f"#{count} {event['a']} {event['op']} {event['b']} = {event['result']}"
             f" (env {event['env']}, build {event['build']})",

@@ -65,13 +65,14 @@ jobs:
           $img = "${{ env.IMAGE }}:$($env:ID)"
           $app = "calc-$($env:TARGET)"
           $worker = "calc-worker-$($env:TARGET)"
+          $otel = "OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318"
           docker pull $img
           if ($LASTEXITCODE -ne 0) { exit 1 }
           docker network create calc-net *> $null
           docker rm -f $app $worker *> $null
-          docker run -d --name $app --network calc-net --restart unless-stopped -p "${port}:8000" -e "APP_ENV=$($env:TARGET)" -e "KAFKA_BOOTSTRAP=kafka:9093" -e LOGTIDE_API_KEY -e LOGTIDE_API_URL $img
+          docker run -d --name $app --network calc-net --restart unless-stopped -p "127.0.0.1:${port}:8000" -e "APP_ENV=$($env:TARGET)" -e "KAFKA_BOOTSTRAP=kafka:9093" -e $otel -e LOGTIDE_API_KEY -e LOGTIDE_API_URL $img
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          docker run -d --name $worker --network calc-net --restart unless-stopped -e "APP_ENV=$($env:TARGET)" -e "KAFKA_BOOTSTRAP=kafka:9093" $img python worker.py
+          docker run -d --name $worker --network calc-net --restart unless-stopped -e "APP_ENV=$($env:TARGET)" -e "KAFKA_BOOTSTRAP=kafka:9093" -e $otel $img python worker.py
           if ($LASTEXITCODE -ne 0) { exit 1 }
           $ok = $false
           for ($i = 0; $i -lt 10; $i++) {

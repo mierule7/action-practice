@@ -6,14 +6,27 @@ from confluent_kafka import KafkaException, Producer
 from flask import Flask, jsonify, render_template_string, request
 from logtide_sdk import ClientOptions, LogTideClient
 from logtide_sdk.middleware import LogTideFlaskMiddleware
+from opentelemetry import metrics
+from opentelemetry.instrumentation.confluent_kafka import ConfluentKafkaInstrumentor
+from opentelemetry.instrumentation.flask import FlaskInstrumentor
 
 import calc
+import telemetry
 
 app = Flask(__name__)
 
 APP_ENV = os.environ.get("APP_ENV", "local")
 BUILD_ID = os.environ.get("BUILD_ID", "local")
 TOPIC = f"calc.events.{APP_ENV}"
+
+tracer_provider = telemetry.setup("calc-app")
+meter = metrics.get_meter("calc-app")
+operations = meter.create_counter(
+    "calc.operations", description="Calculations requested"
+)
+
+if tracer_provider is not None:
+    FlaskInstrumentor().instrument_app(app, excluded_urls="health")
 
 client = None
 producer = None
@@ -42,6 +55,10 @@ if os.environ.get("KAFKA_BOOTSTRAP"):
             "message.timeout.ms": 5000,
         }
     )
+    if tracer_provider is not None:
+        producer = ConfluentKafkaInstrumentor().instrument_producer(
+            producer, tracer_provider
+        )
 
 
 def on_delivery(err, msg):
@@ -148,6 +165,7 @@ def api_calc():
             raise ValueError("Unknown operation")
         result = OPS[op](a, b)
     except (KeyError, ValueError) as err:
+        operations.add(1, {"op": op or "unknown", "outcome": "bad_request"})
         if client:
             client.warn(
                 "calc-app",
@@ -155,6 +173,7 @@ def api_calc():
                 {"op": op, "error": str(err) or "Enter two numbers"},
             )
         return jsonify(error=str(err) or "Enter two numbers"), 400
+    operations.add(1, {"op": op, "outcome": "ok"})
     publish_event(op, a, b, result)
     return jsonify(result=result)
 
