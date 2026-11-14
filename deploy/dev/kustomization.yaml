@@ -5,7 +5,7 @@ resources:
   - ../base
 images:
   - name: ghcr.io/mierule7/action-practice
-    newTag: "42"
+    newTag: "43"
 generatorOptions:
   disableNameSuffixHash: true
 configMapGenerator:
