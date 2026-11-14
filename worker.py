@@ -3,15 +3,16 @@ import os
 import signal
 
 from confluent_kafka import Consumer
-from opentelemetry import metrics
-from opentelemetry.instrumentation.confluent_kafka import ConfluentKafkaInstrumentor
+from opentelemetry import metrics, propagate, trace
+from opentelemetry.trace import SpanKind
 
 import telemetry
 
 env = os.environ.get("APP_ENV", "local")
 topic = f"calc.events.{env}"
 
-tracer_provider = telemetry.setup("calc-worker")
+telemetry.setup("calc-worker")
+tracer = trace.get_tracer("calc-worker")
 meter = metrics.get_meter("calc-worker")
 processed = meter.create_counter(
     "calc.events.processed", description="Events handled by the worker"
@@ -24,10 +25,6 @@ consumer = Consumer(
         "auto.offset.reset": "earliest",
     }
 )
-if tracer_provider is not None:
-    consumer = ConfluentKafkaInstrumentor().instrument_consumer(
-        consumer, tracer_provider=tracer_provider
-    )
 consumer.subscribe([topic])
 
 running = True
@@ -51,13 +48,26 @@ try:
         if msg.error():
             print(f"consumer error: {msg.error()}", flush=True)
             continue
-        event = json.loads(msg.value().decode("utf-8"))
-        count += 1
-        processed.add(1, {"op": event["op"]})
-        print(
-            f"#{count} {event['a']} {event['op']} {event['b']} = {event['result']}"
-            f" (env {event['env']}, build {event['build']})",
-            flush=True,
-        )
+
+        headers = {
+            key: (value.decode("utf-8") if isinstance(value, bytes) else value)
+            for key, value in (msg.headers() or [])
+        }
+        parent = propagate.extract(headers)
+
+        with tracer.start_as_current_span(
+            f"{topic} process", context=parent, kind=SpanKind.CONSUMER
+        ) as span:
+            span.set_attribute("messaging.system", "kafka")
+            span.set_attribute("messaging.destination.name", topic)
+            span.set_attribute("messaging.kafka.offset", msg.offset())
+            event = json.loads(msg.value().decode("utf-8"))
+            count += 1
+            processed.add(1, {"op": event["op"]})
+            print(
+                f"#{count} {event['a']} {event['op']} {event['b']} = {event['result']}"
+                f" (env {event['env']}, build {event['build']})",
+                flush=True,
+            )
 finally:
     consumer.close()

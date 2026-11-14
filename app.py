@@ -6,9 +6,9 @@ from confluent_kafka import KafkaException, Producer
 from flask import Flask, jsonify, render_template_string, request
 from logtide_sdk import ClientOptions, LogTideClient
 from logtide_sdk.middleware import LogTideFlaskMiddleware
-from opentelemetry import metrics
-from opentelemetry.instrumentation.confluent_kafka import ConfluentKafkaInstrumentor
+from opentelemetry import metrics, propagate, trace
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
+from opentelemetry.trace import SpanKind
 
 import calc
 import telemetry
@@ -20,6 +20,7 @@ BUILD_ID = os.environ.get("BUILD_ID", "local")
 TOPIC = f"calc.events.{APP_ENV}"
 
 tracer_provider = telemetry.setup("calc-app")
+tracer = trace.get_tracer("calc-app")
 meter = metrics.get_meter("calc-app")
 operations = meter.create_counter(
     "calc.operations", description="Calculations requested"
@@ -55,10 +56,6 @@ if os.environ.get("KAFKA_BOOTSTRAP"):
             "message.timeout.ms": 5000,
         }
     )
-    if tracer_provider is not None:
-        producer = ConfluentKafkaInstrumentor().instrument_producer(
-            producer, tracer_provider
-        )
 
 
 def on_delivery(err, msg):
@@ -79,13 +76,24 @@ def publish_event(op, a, b, result):
         "result": result,
         "ts": time.time(),
     }
-    try:
-        producer.produce(
-            TOPIC, json.dumps(event).encode("utf-8"), callback=on_delivery
-        )
-        producer.poll(0)
-    except (BufferError, KafkaException) as err:
-        app.logger.warning("Kafka publish failed: %s", err)
+    with tracer.start_as_current_span(
+        f"{TOPIC} publish", kind=SpanKind.PRODUCER
+    ) as span:
+        span.set_attribute("messaging.system", "kafka")
+        span.set_attribute("messaging.destination.name", TOPIC)
+        headers = {}
+        propagate.inject(headers)
+        try:
+            producer.produce(
+                TOPIC,
+                json.dumps(event).encode("utf-8"),
+                headers=headers or None,
+                callback=on_delivery,
+            )
+            producer.poll(0)
+        except (BufferError, KafkaException) as err:
+            span.record_exception(err)
+            app.logger.warning("Kafka publish failed: %s", err)
 
 
 OPS = {
