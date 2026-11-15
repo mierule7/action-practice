@@ -1,0 +1,129 @@
+name: Deploy GitOps
+
+run-name: GitOps ${{ inputs.environment }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (uat copies dev, prod copies uat)'
+        type: choice
+        required: true
+        options:
+          - dev
+          - uat
+          - prod
+      build_id:
+        description: 'dev only: Build ID, or blank for the latest successful build. Leave blank for uat and prod'
+        type: string
+        required: false
+
+permissions:
+  contents: write
+  packages: read
+  actions: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+concurrency:
+  group: gitops-deploy
+  cancel-in-progress: false
+
+jobs:
+  update-tag:
+    name: Update ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide which build to deploy
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ inputs.environment }}
+          INPUT_ID: ${{ inputs.build_id }}
+        run: |
+          if [ ! -f "deploy/$TARGET/kustomization.yaml" ]; then
+            echo "deploy/$TARGET does not exist yet. Create the $TARGET overlay first."
+            exit 1
+          fi
+          if [ "$TARGET" = "dev" ]; then
+            if [ -n "$INPUT_ID" ]; then
+              ID="$INPUT_ID"
+              SOURCE="the Build ID you typed"
+            else
+              ID=$(gh run list --repo "${{ github.repository }}" --workflow build.yml --status success --limit 1 --json number --jq '.[0].number')
+              SOURCE="the latest successful Build Image run"
+            fi
+          else
+            if [ -n "$INPUT_ID" ]; then
+              echo "Leave Build ID blank for $TARGET. It copies the build from the previous environment."
+              exit 1
+            fi
+            if [ "$TARGET" = "uat" ]; then FROM=dev; else FROM=uat; fi
+            ID=$(sed -n -E 's/^ *newTag: *"?([0-9]+)"?.*/\1/p' "deploy/$FROM/kustomization.yaml" | head -n 1)
+            SOURCE="deploy/$FROM/kustomization.yaml"
+          fi
+          if ! [[ "$ID" =~ ^[0-9]+$ ]]; then
+            echo "Could not work out a Build ID (got '$ID')"
+            exit 1
+          fi
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+          echo "Build $ID comes from $SOURCE"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check the image exists
+        env:
+          ID: ${{ steps.pick.outputs.id }}
+        run: |
+          if docker manifest inspect "${{ env.IMAGE }}:$ID" > /dev/null 2>&1; then
+            echo "OK: image $ID exists in the registry"
+          else
+            echo "BLOCKED: image $ID is not in the registry"
+            exit 1
+          fi
+
+      - name: Set the image tag and commit it
+        env:
+          TARGET: ${{ inputs.environment }}
+          ID: ${{ steps.pick.outputs.id }}
+        run: |
+          FILE="deploy/$TARGET/kustomization.yaml"
+          CURRENT=$(sed -n -E 's/^ *newTag: *"?([0-9]+)"?.*/\1/p' "$FILE" | head -n 1)
+          if [ "$CURRENT" = "$ID" ]; then
+            echo "$TARGET already runs build $ID. Nothing to do."
+            exit 0
+          fi
+          sed -i -E "s/^( *newTag: ).*/\1\"$ID\"/" "$FILE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FILE"
+          git commit -m "$TARGET: deploy build $ID (was $CURRENT)"
+          git pull --rebase
+          git push
+          echo "Committed $(git rev-parse --short HEAD). Argo CD shows $TARGET as OutOfSync until it syncs."
+
+      - name: Show which build is in each environment
+        if: always()
+        run: |
+          {
+            echo "## Builds in Git"
+            echo "| Environment | Build |"
+            echo "|---|---|"
+            for e in dev uat prod; do
+              f="deploy/$e/kustomization.yaml"
+              if [ -f "$f" ]; then
+                t=$(sed -n -E 's/^ *newTag: *"?([0-9]+)"?.*/\1/p' "$f" | head -n 1)
+                echo "| $e | $t |"
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
